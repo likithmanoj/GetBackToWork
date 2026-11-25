@@ -218,7 +218,13 @@ fun TimerScreen(
             isLoadingLauncherApps = allInstalledAppsForLauncher.isEmpty()
             val raw = AppRepository(context).getInstalledApps()
             allInstalledAppsForLauncher = raw
-                .map { it.copy(appName = sessionManager.resolveAppName(it.packageName, it.appName)) }
+                .map {
+                    val resolvedName = sessionManager.resolveAppName(
+                        it.uniqueKey,
+                        sessionManager.resolveAppName(it.packageName, it.appName)
+                    )
+                    it.copy(appName = resolvedName)
+                }
                 .sortedBy { it.appName.lowercase() }
             isLoadingLauncherApps = false
         }
@@ -930,7 +936,13 @@ fun TimerScreen(
     if (showPinnedEditorDialog) {
         val allowedResolved = remember(whitelistedAppsList, customAppNames) {
             whitelistedAppsList
-                .map { it.copy(appName = sessionManager.resolveAppName(it.packageName, it.appName)) }
+                .map {
+                    val resolvedName = sessionManager.resolveAppName(
+                        it.uniqueKey,
+                        sessionManager.resolveAppName(it.packageName, it.appName)
+                    )
+                    it.copy(appName = resolvedName)
+                }
                 .sortedBy { it.appName.lowercase() }
         }
         val initialOrder = if (isHomePinnedCustomized) {
@@ -939,7 +951,7 @@ fun TimerScreen(
             resolveDefaultEssentialApps(
                 installedApps = allInstalledAppsForLauncher,
                 allowedApps = allowedResolved
-            ).map { it.packageName }
+            ).map { it.uniqueKey }
         }
         PinnedEssentialsEditorDialog(
             installedApps = allInstalledAppsForLauncher,

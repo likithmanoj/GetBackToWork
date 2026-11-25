@@ -53,6 +53,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.getbacktowork.app.data.AppInfo
+import com.getbacktowork.app.data.AppRepository
+import com.getbacktowork.app.ui.components.WorkProfileBadge
+import com.getbacktowork.app.ui.components.WorkProfileDropdownHeader
 import com.getbacktowork.app.ui.theme.BrandPrimary
 import com.getbacktowork.app.ui.theme.DarkSurface
 import com.getbacktowork.app.ui.theme.DarkSurfaceElevated
@@ -99,15 +102,21 @@ fun PinnedEssentialsEditorDialog(
     onResetToAuto: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var workExpanded by remember { mutableStateOf(false) }
     var hasUserEdited by remember { mutableStateOf(false) }
     var draftOrder by remember { mutableStateOf(initialPinnedOrder.distinct()) }
 
-    val appByPkg = remember(installedApps) { installedApps.associateBy { it.packageName } }
+    val appByKey = remember(installedApps) { installedApps.associateBy { it.uniqueKey } }
+    val appByPersonalPkg = remember(installedApps) {
+        installedApps.filterNot { it.isWorkProfile }.associateBy { it.packageName }
+    }
 
     LaunchedEffect(installedApps, isLoadingApps, initialPinnedOrder) {
         if (!isLoadingApps && !hasUserEdited) {
-            draftOrder = if (appByPkg.isNotEmpty()) {
-                initialPinnedOrder.filter { appByPkg.containsKey(it) }.distinct()
+            draftOrder = if (appByKey.isNotEmpty()) {
+                initialPinnedOrder.mapNotNull { key ->
+                    (appByKey[key] ?: appByPersonalPkg[key])?.uniqueKey
+                }.distinct()
             } else {
                 initialPinnedOrder.distinct()
             }
@@ -116,7 +125,10 @@ fun PinnedEssentialsEditorDialog(
 
     val unpinnedApps = remember(installedApps, draftOrder) {
         val draftSet = draftOrder.toSet()
-        installedApps.filterNot { draftSet.contains(it.packageName) }
+        installedApps.filterNot { draftSet.contains(it.uniqueKey) }
+    }
+    val (unpinnedPersonal, unpinnedWork) = remember(unpinnedApps) {
+        AppRepository.partitionPersonalAndWorkApps(unpinnedApps)
     }
 
     val searchMatches = remember(searchQuery, installedApps) {
@@ -265,8 +277,8 @@ fun PinnedEssentialsEditorDialog(
                         onClick = {
                             hasUserEdited = true
                             draftOrder = installedApps
-                                .filter { allowedPackages.contains(it.packageName) }
-                                .map { it.packageName }
+                                .filter { allowedPackages.contains(it.packageName) || allowedPackages.contains(it.uniqueKey) }
+                                .map { it.uniqueKey }
                         }
                     )
                     EditorQuickChip(
@@ -324,9 +336,9 @@ fun PinnedEssentialsEditorDialog(
                                     }
                                     itemsIndexed(
                                         items = draftOrder,
-                                        key = { _, pkg -> "pinned_$pkg" }
-                                    ) { index, pkg ->
-                                        val app = appByPkg[pkg] ?: return@itemsIndexed
+                                        key = { _, key -> "pinned_$key" }
+                                    ) { index, key ->
+                                        val app = appByKey[key] ?: appByPersonalPkg[key] ?: return@itemsIndexed
                                         PinnedOrderRow(
                                             app = app,
                                             canMoveUp = index > 0,
@@ -349,7 +361,7 @@ fun PinnedEssentialsEditorDialog(
                                             },
                                             onRemove = {
                                                 hasUserEdited = true
-                                                draftOrder = draftOrder.filterNot { it == pkg }
+                                                draftOrder = draftOrder.filterNot { it == key }
                                             }
                                         )
                                     }
@@ -371,9 +383,35 @@ fun PinnedEssentialsEditorDialog(
                                         )
                                     )
                                 }
+                                if (unpinnedWork.isNotEmpty()) {
+                                    item(key = "work_dropdown_header") {
+                                        WorkProfileDropdownHeader(
+                                            count = unpinnedWork.size,
+                                            expanded = workExpanded,
+                                            onToggle = { workExpanded = !workExpanded },
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                    if (workExpanded) {
+                                        items(
+                                            items = unpinnedWork,
+                                            key = { "unpinned_work_${it.uniqueKey}" }
+                                        ) { app ->
+                                            SelectableAppRow(
+                                                app = app,
+                                                isSelected = false,
+                                                isAllowedTool = allowedPackages.contains(app.packageName),
+                                                onToggle = {
+                                                    hasUserEdited = true
+                                                    draftOrder = draftOrder + app.uniqueKey
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
                                 items(
-                                    items = unpinnedApps,
-                                    key = { "unpinned_${it.packageName}" }
+                                    items = unpinnedPersonal,
+                                    key = { "unpinned_${it.uniqueKey}" }
                                 ) { app ->
                                     SelectableAppRow(
                                         app = app,
@@ -381,7 +419,7 @@ fun PinnedEssentialsEditorDialog(
                                         isAllowedTool = allowedPackages.contains(app.packageName),
                                         onToggle = {
                                             hasUserEdited = true
-                                            draftOrder = draftOrder + app.packageName
+                                            draftOrder = draftOrder + app.uniqueKey
                                         }
                                     )
                                 }
@@ -397,9 +435,9 @@ fun PinnedEssentialsEditorDialog(
                             } else {
                                 items(
                                     items = searchMatches,
-                                    key = { "search_${it.packageName}" }
+                                    key = { "search_${it.uniqueKey}" }
                                 ) { app ->
-                                    val selected = draftOrder.contains(app.packageName)
+                                    val selected = draftOrder.contains(app.uniqueKey)
                                     SelectableAppRow(
                                         app = app,
                                         isSelected = selected,
@@ -407,9 +445,9 @@ fun PinnedEssentialsEditorDialog(
                                         onToggle = {
                                             hasUserEdited = true
                                             draftOrder = if (selected) {
-                                                draftOrder.filterNot { it == app.packageName }
+                                                draftOrder.filterNot { it == app.uniqueKey }
                                             } else {
-                                                draftOrder + app.packageName
+                                                draftOrder + app.uniqueKey
                                             }
                                         }
                                     )
@@ -499,15 +537,24 @@ private fun PinnedOrderRow(
     ) {
         AppRowIconBadge(app = app)
         Spacer(modifier = Modifier.width(10.dp))
-        Text(
-            text = app.appName,
-            color = TextPrimary,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = app.appName,
+                color = TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            if (app.isWorkProfile) {
+                Spacer(modifier = Modifier.width(6.dp))
+                WorkProfileBadge()
+            }
+        }
         Box(
             modifier = Modifier
                 .size(28.dp)
@@ -572,14 +619,21 @@ private fun SelectableAppRow(
         AppRowIconBadge(app = app)
         Spacer(modifier = Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = app.appName,
-                color = TextPrimary,
-                fontSize = 14.sp,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = app.appName,
+                    color = TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (app.isWorkProfile) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    WorkProfileBadge()
+                }
+            }
             if (isAllowedTool) {
                 Text(
                     text = "Allowed Tool",

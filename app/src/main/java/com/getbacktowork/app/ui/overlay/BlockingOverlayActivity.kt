@@ -89,6 +89,8 @@ import androidx.compose.ui.unit.sp
 import com.getbacktowork.app.data.AppInfo
 import com.getbacktowork.app.data.AppRepository
 import com.getbacktowork.app.data.FocusSessionManager
+import com.getbacktowork.app.ui.components.WorkProfileBadge
+import com.getbacktowork.app.ui.components.WorkProfileDropdownHeader
 import com.getbacktowork.app.ui.screens.UltraFocusRealityCheckDialog
 import com.getbacktowork.app.ui.theme.BrandPrimary
 import com.getbacktowork.app.ui.theme.ClockDisplayText
@@ -148,7 +150,7 @@ class BlockingOverlayActivity : ComponentActivity() {
                 FocusOverlayContent(
                     sessionManager = sessionManager,
                     onOpenPhone = { openPhoneApp() },
-                    onOpenAllowedApp = { pkg -> openAllowedApp(pkg) },
+                    onOpenAllowedApp = { app -> AppRepository.launchApp(this, app) },
                     onSessionFinished = { finish() }
                 )
             }
@@ -170,19 +172,6 @@ class BlockingOverlayActivity : ComponentActivity() {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             startActivity(intent)
-        } catch (e: Exception) {
-            // ignore
-        }
-    }
-
-    private fun openAllowedApp(packageName: String) {
-        try {
-            lastLaunchedAllowedTime = System.currentTimeMillis()
-            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-            if (launchIntent != null) {
-                launchIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                startActivity(launchIntent)
-            }
         } catch (e: Exception) {
             // ignore
         }
@@ -210,7 +199,7 @@ class BlockingOverlayActivity : ComponentActivity() {
 fun FocusOverlayContent(
     sessionManager: FocusSessionManager,
     onOpenPhone: () -> Unit,
-    onOpenAllowedApp: (String) -> Unit,
+    onOpenAllowedApp: (AppInfo) -> Unit,
     onSessionFinished: () -> Unit
 ) {
     val context = LocalContext.current
@@ -259,7 +248,13 @@ fun FocusOverlayContent(
             repo.getAppsForPackages(allowedPackages)
         }
         allowedApps = rawList
-            .map { it.copy(appName = sessionManager.resolveAppName(it.packageName, it.appName)) }
+            .map {
+                val resolvedName = sessionManager.resolveAppName(
+                    it.uniqueKey,
+                    sessionManager.resolveAppName(it.packageName, it.appName)
+                )
+                it.copy(appName = resolvedName)
+            }
             .sortedBy { it.appName.lowercase() }
         isLoadingApps = false
     }
@@ -467,7 +462,7 @@ private fun FocusTimerPage(
     isLoadingApps: Boolean,
     sessionManager: FocusSessionManager,
     onOpenPhone: () -> Unit,
-    onOpenAllowedApp: (String) -> Unit,
+    onOpenAllowedApp: (AppInfo) -> Unit,
     onOpenPassDialog: () -> Unit,
     onSwipeToLauncher: () -> Unit
 ) {
@@ -638,14 +633,14 @@ private fun FocusTimerPage(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(allowedApps, key = { it.packageName }) { app ->
+                items(allowedApps, key = { it.uniqueKey }) { app ->
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(16.dp))
                             .background(DarkSurface)
                             .border(0.75.dp, HairlineBorder, RoundedCornerShape(16.dp))
-                            .clickable { onOpenAllowedApp(app.packageName) }
+                            .clickable { onOpenAllowedApp(app) }
                             .padding(vertical = 14.dp, horizontal = 8.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
@@ -684,6 +679,10 @@ private fun FocusTimerPage(
                             overflow = TextOverflow.Ellipsis,
                             textAlign = TextAlign.Center
                         )
+                        if (app.isWorkProfile) {
+                            Spacer(modifier = Modifier.height(3.dp))
+                            WorkProfileBadge()
+                        }
                     }
                 }
             }
@@ -793,13 +792,14 @@ private fun MinimalistLauncherPage(
     topLifeGoal: String,
     scheduleLabel: String?,
     onToggleTransitPass: () -> Unit,
-    onOpenAllowedApp: (String) -> Unit,
+    onOpenAllowedApp: (AppInfo) -> Unit,
     onOpenPhone: () -> Unit,
     onOpenRealityCheck: () -> Unit,
     onSwipeToTimer: (() -> Unit)?
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var isSearchOpen by remember { mutableStateOf(false) }
+    var workExpanded by remember { mutableStateOf(false) }
     val timeFormatter = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
     val dateFormatter = remember { SimpleDateFormat("EEEE, MMM d", Locale.getDefault()) }
     val currentTime = remember(tickNow) { timeFormatter.format(Date(tickNow)) }
@@ -813,6 +813,10 @@ private fun MinimalistLauncherPage(
                 .sortedBy { it.appName.lowercase() }
         }
     }
+    val (personalAllowed, workAllowed) = remember(filteredApps) {
+        AppRepository.partitionPersonalAndWorkApps(filteredApps)
+    }
+    val effectiveWorkExpanded = workExpanded || searchQuery.isNotBlank()
 
     Column(
         modifier = Modifier
@@ -973,12 +977,47 @@ private fun MinimalistLauncherPage(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                items(filteredApps, key = { it.packageName }) { app ->
+                if (workAllowed.isNotEmpty()) {
+                    item(key = "work_dropdown_focus") {
+                        WorkProfileDropdownHeader(
+                            count = workAllowed.size,
+                            expanded = effectiveWorkExpanded,
+                            onToggle = { workExpanded = !workExpanded }
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+                    if (effectiveWorkExpanded) {
+                        items(workAllowed, key = { "work_lock_${it.uniqueKey}" }) { app ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { onOpenAllowedApp(app) }
+                                    .padding(horizontal = 2.dp, vertical = 14.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = app.appName,
+                                    color = TextPrimary,
+                                    fontSize = 21.sp,
+                                    fontWeight = FontWeight.Light,
+                                    letterSpacing = 0.2.sp
+                                )
+                                WorkProfileBadge()
+                            }
+                        }
+                    }
+                    item(key = "work_dropdown_spacer") {
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+                }
+                items(personalAllowed, key = { it.uniqueKey }) { app ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
-                            .clickable { onOpenAllowedApp(app.packageName) }
+                            .clickable { onOpenAllowedApp(app) }
                             .padding(horizontal = 2.dp, vertical = 15.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {

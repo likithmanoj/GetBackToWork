@@ -1,6 +1,8 @@
 package com.getbacktowork.app
 
 import android.content.SharedPreferences
+import com.getbacktowork.app.data.AppInfo
+import com.getbacktowork.app.data.AppRepository
 import com.getbacktowork.app.data.FocusSessionManager
 import com.getbacktowork.app.service.AppBlockerAccessibilityService
 import com.getbacktowork.app.ui.overlay.ClarityPuzzleBank
@@ -993,5 +995,80 @@ class FocusLogicTest {
 
         manager.clearShieldDiagnostics()
         assertTrue(manager.getShieldDiagnostics().isEmpty())
+    }
+
+    @Test
+    fun testWorkProfileKeysPartitioningAndPinnedResolution() {
+        val personalSlack = AppInfo(
+            packageName = "com.slack",
+            appName = "Slack",
+            isWorkProfile = false,
+            profileSerial = 0L
+        )
+        val workSlack = AppInfo(
+            packageName = "com.slack",
+            appName = "Slack",
+            isWorkProfile = true,
+            profileSerial = 10L,
+            componentClassName = "com.slack.ui.HomeActivity"
+        )
+        val workTeams = AppInfo(
+            packageName = "com.microsoft.teams",
+            appName = "Teams",
+            isWorkProfile = true,
+            profileSerial = 10L
+        )
+
+        assertEquals("com.slack", personalSlack.uniqueKey)
+        assertEquals("work:10:com.slack", workSlack.uniqueKey)
+        assertTrue(personalSlack.uniqueKey != workSlack.uniqueKey)
+
+        val (personal, work) = AppRepository.partitionPersonalAndWorkApps(
+            listOf(personalSlack, workSlack, workTeams)
+        )
+        assertEquals(listOf(personalSlack), personal)
+        assertEquals(listOf(workSlack, workTeams), work)
+
+        val resolved = AppRepository.resolvePinnedSelection(
+            apps = listOf(personalSlack, workSlack, workTeams),
+            orderedKeys = listOf("work:10:com.slack", "com.slack")
+        )
+        assertEquals(listOf(workSlack, personalSlack), resolved)
+    }
+
+    @Test
+    fun testWorkProfileTopOrderingAndPinningIsolation() {
+        val personalOutlook = AppInfo(
+            packageName = "com.microsoft.office.outlook",
+            appName = "Outlook",
+            isWorkProfile = false,
+            profileSerial = 0L
+        )
+        val workOutlook = AppInfo(
+            packageName = "com.microsoft.office.outlook",
+            appName = "Outlook",
+            isWorkProfile = true,
+            profileSerial = 10L
+        )
+        val allApps = listOf(personalOutlook, workOutlook)
+        val (personal, work) = AppRepository.partitionPersonalAndWorkApps(allApps)
+
+        // Work section rendered at the top before personal section
+        val topOrdered = work + personal
+        assertEquals(listOf(workOutlook, personalOutlook), topOrdered)
+
+        // Pinning only the work app does not pin the personal app with the same package
+        val workOnlyPinned = AppRepository.resolvePinnedSelection(
+            apps = allApps,
+            orderedKeys = listOf(workOutlook.uniqueKey)
+        )
+        assertEquals(listOf(workOutlook), workOnlyPinned)
+
+        // Pinning both preserves order and keeps them distinct
+        val bothPinned = AppRepository.resolvePinnedSelection(
+            apps = allApps,
+            orderedKeys = listOf(workOutlook.uniqueKey, personalOutlook.uniqueKey)
+        )
+        assertEquals(listOf(workOutlook, personalOutlook), bothPinned)
     }
 }

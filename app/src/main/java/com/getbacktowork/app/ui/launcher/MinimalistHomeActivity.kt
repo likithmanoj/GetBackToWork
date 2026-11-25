@@ -87,6 +87,8 @@ import com.getbacktowork.app.data.AppRepository
 import com.getbacktowork.app.data.FocusSessionManager
 import com.getbacktowork.app.ui.MainActivity
 import com.getbacktowork.app.ui.components.AppRuleConfigDialog
+import com.getbacktowork.app.ui.components.WorkProfileBadge
+import com.getbacktowork.app.ui.components.WorkProfileDropdownHeader
 import com.getbacktowork.app.ui.overlay.BlockingOverlayActivity
 import com.getbacktowork.app.ui.overlay.EmergencyPassDialog
 import com.getbacktowork.app.ui.screens.UltraFocusRealityCheckDialog
@@ -144,7 +146,7 @@ class MinimalistHomeActivity : ComponentActivity() {
                     },
                     onOpenPhone = { openPhoneApp() },
                     onOpenCamera = { openCameraApp() },
-                    onLaunchPackage = { pkg -> launchPackage(pkg) }
+                    onLaunchApp = { app -> AppRepository.launchApp(this, app) }
                 )
             }
         }
@@ -176,18 +178,6 @@ class MinimalistHomeActivity : ComponentActivity() {
         } catch (_: Exception) {
         }
     }
-
-    private fun launchPackage(packageName: String) {
-        try {
-            BlockingOverlayActivity.lastLaunchedAllowedTime = System.currentTimeMillis()
-            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-            if (launchIntent != null) {
-                launchIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                startActivity(launchIntent)
-            }
-        } catch (_: Exception) {
-        }
-    }
 }
 
 @Composable
@@ -196,7 +186,7 @@ private fun MinimalistHomeContent(
     onOpenDashboard: () -> Unit,
     onOpenPhone: () -> Unit,
     onOpenCamera: () -> Unit,
-    onLaunchPackage: (String) -> Unit
+    onLaunchApp: (AppInfo) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -246,16 +236,26 @@ private fun MinimalistHomeContent(
     LaunchedEffect(allowedPackages, ultraFocusState.isTransitPassActive, customAppNames) {
         val repo = AppRepository(context)
         val allRaw = repo.getInstalledApps()
-        val all = allRaw.map { it.copy(appName = sessionManager.resolveAppName(it.packageName, it.appName)) }
-            .sortedBy { it.appName.lowercase() }
+        val all = allRaw.map {
+            val resolvedName = sessionManager.resolveAppName(
+                it.uniqueKey,
+                sessionManager.resolveAppName(it.packageName, it.appName)
+            )
+            it.copy(appName = resolvedName)
+        }.sortedBy { it.appName.lowercase() }
         installedApps = all
         val rawAllowed = if (ultraFocusState.isTransitPassActive) {
             allRaw.filter { allowedPackages.contains(it.packageName) || sessionManager.isTransitEssentialApp(it.packageName) }
         } else {
             repo.getAppsForPackages(allowedPackages)
         }
-        allowedApps = rawAllowed.map { it.copy(appName = sessionManager.resolveAppName(it.packageName, it.appName)) }
-            .sortedBy { it.appName.lowercase() }
+        allowedApps = rawAllowed.map {
+            val resolvedName = sessionManager.resolveAppName(
+                it.uniqueKey,
+                sessionManager.resolveAppName(it.packageName, it.appName)
+            )
+            it.copy(appName = resolvedName)
+        }.sortedBy { it.appName.lowercase() }
     }
 
     LaunchedEffect(lifecycleOwner) {
@@ -276,13 +276,15 @@ private fun MinimalistHomeContent(
     }
     val yearProgress = remember(tickNow) { sessionManager.getYearProgressInfo() }
 
-    val appByPkg = remember(installedApps) { installedApps.associateBy { it.packageName } }
     val fallbackHomeApps = remember(allowedApps, installedApps) {
         resolveDefaultEssentialApps(installedApps = installedApps, allowedApps = allowedApps)
     }
+    val allWorkApps = remember(installedApps) {
+        AppRepository.partitionPersonalAndWorkApps(installedApps).second
+    }
     val homeVisibleApps = remember(
         allowedApps,
-        appByPkg,
+        installedApps,
         homePinnedOrder,
         isHomePinnedCustomized,
         shouldBlock,
@@ -290,12 +292,12 @@ private fun MinimalistHomeContent(
     ) {
         when {
             shouldBlock -> allowedApps
-            isHomePinnedCustomized -> homePinnedOrder.mapNotNull { appByPkg[it] }
+            isHomePinnedCustomized -> AppRepository.resolvePinnedSelection(installedApps, homePinnedOrder)
             else -> fallbackHomeApps
         }
     }
     val effectivePinnedPackages = remember(homePinnedPackages, isHomePinnedCustomized, fallbackHomeApps) {
-        if (isHomePinnedCustomized) homePinnedPackages else fallbackHomeApps.map { it.packageName }.toSet()
+        if (isHomePinnedCustomized) homePinnedPackages else fallbackHomeApps.map { it.uniqueKey }.toSet()
     }
 
     Surface(
@@ -323,6 +325,11 @@ private fun MinimalistHomeContent(
                     yearDaysLeft = "${yearProgress.daysRemaining}d left in ${yearProgress.year}",
                     topLifeGoal = lifeGoals.firstOrNull().orEmpty(),
                     visibleApps = homeVisibleApps,
+                    workDropdownApps = if (shouldBlock) {
+                        AppRepository.partitionPersonalAndWorkApps(allowedApps).second
+                    } else {
+                        allWorkApps
+                    },
                     sessionManager = sessionManager,
                     onOpenDashboard = onOpenDashboard,
                     onOpenEditPinned = { showEditPinnedDialog = true },
@@ -331,12 +338,12 @@ private fun MinimalistHomeContent(
                     onOpenCamera = onOpenCamera,
                     onOpenApp = { app ->
                         if (shouldBlock) {
-                            onLaunchPackage(app.packageName)
+                            onLaunchApp(app)
                         } else {
                             handleIdleAppTap(
                                 app = app,
                                 sessionManager = sessionManager,
-                                onImmediateLaunch = { onLaunchPackage(app.packageName) },
+                                onImmediateLaunch = { onLaunchApp(app) },
                                 onRequirePause = { pausedTargetApp = app }
                             )
                         }
@@ -357,14 +364,14 @@ private fun MinimalistHomeContent(
                     allApps = installedApps,
                     homePinnedPackages = effectivePinnedPackages,
                     onTogglePin = { app ->
-                        val fallbackPkgs = if (!isHomePinnedCustomized) {
-                            fallbackHomeApps.map { it.packageName }
+                        val fallbackKeys = if (!isHomePinnedCustomized) {
+                            fallbackHomeApps.map { it.uniqueKey }
                         } else {
                             emptyList()
                         }
                         val pinned = sessionManager.toggleHomePinnedPackage(
-                            packageName = app.packageName,
-                            initialFallbackPackages = fallbackPkgs
+                            packageName = app.uniqueKey,
+                            initialFallbackPackages = fallbackKeys
                         )
                         Toast.makeText(
                             context,
@@ -380,7 +387,7 @@ private fun MinimalistHomeContent(
                         handleIdleAppTap(
                             app = app,
                             sessionManager = sessionManager,
-                            onImmediateLaunch = { onLaunchPackage(app.packageName) },
+                            onImmediateLaunch = { onLaunchApp(app) },
                             onRequirePause = { pausedTargetApp = app }
                         )
                     }
@@ -392,28 +399,29 @@ private fun MinimalistHomeContent(
     actionTargetApp?.let { target ->
         AppRuleConfigDialog(
             app = target,
-            currentAlias = customAppNames[target.packageName].orEmpty(),
+            currentAlias = (customAppNames[target.uniqueKey] ?: customAppNames[target.packageName]).orEmpty(),
             currentCap = appDailyCaps[target.packageName],
             todayUsage = appTodayUsage[target.packageName] ?: FocusSessionManager.AppTodayUsage(target.packageName, ""),
             isCooldownEnabled = cooldownPackages.contains(target.packageName),
             showPinOption = true,
-            isPinned = effectivePinnedPackages.contains(target.packageName),
+            isPinned = effectivePinnedPackages.contains(target.uniqueKey) ||
+                (!target.isWorkProfile && effectivePinnedPackages.contains(target.packageName)),
             onDismiss = { actionTargetApp = null },
             onSaveRules = { newAlias, maxMins, maxOpens ->
-                sessionManager.setCustomAppName(target.packageName, newAlias)
+                sessionManager.setCustomAppName(target.uniqueKey, newAlias)
                 sessionManager.setAppDailyCap(target.packageName, maxMins, maxOpens)
                 Toast.makeText(context, "Saved rules for ${target.appName}", Toast.LENGTH_SHORT).show()
                 actionTargetApp = null
             },
             onTogglePin = {
-                val fallbackPkgs = if (!isHomePinnedCustomized) {
-                    fallbackHomeApps.map { it.packageName }
+                val fallbackKeys = if (!isHomePinnedCustomized) {
+                    fallbackHomeApps.map { it.uniqueKey }
                 } else {
                     emptyList()
                 }
                 val pinned = sessionManager.toggleHomePinnedPackage(
-                    packageName = target.packageName,
-                    initialFallbackPackages = fallbackPkgs
+                    packageName = target.uniqueKey,
+                    initialFallbackPackages = fallbackKeys
                 )
                 Toast.makeText(context, if (pinned) "Pinned" else "Unpinned", Toast.LENGTH_SHORT).show()
                 actionTargetApp = null
@@ -440,9 +448,8 @@ private fun MinimalistHomeContent(
             screenGoalMinutes = advice.screenGoalMinutes,
             onDismiss = { pausedTargetApp = null },
             onProceed = {
-                val pkg = targetApp.packageName
                 pausedTargetApp = null
-                onLaunchPackage(pkg)
+                onLaunchApp(targetApp)
             }
         )
     }
@@ -469,7 +476,7 @@ private fun MinimalistHomeContent(
             initialPinnedOrder = if (isHomePinnedCustomized) {
                 homePinnedOrder
             } else {
-                fallbackHomeApps.map { it.packageName }
+                fallbackHomeApps.map { it.uniqueKey }
             },
             allowedPackages = allowedPackages,
             onDismiss = { showEditPinnedDialog = false },
@@ -524,6 +531,7 @@ private fun MinimalistHomeMainPage(
     yearDaysLeft: String,
     topLifeGoal: String,
     visibleApps: List<AppInfo>,
+    workDropdownApps: List<AppInfo>,
     sessionManager: FocusSessionManager,
     onOpenDashboard: () -> Unit,
     onOpenEditPinned: () -> Unit,
@@ -539,6 +547,12 @@ private fun MinimalistHomeMainPage(
     val dateFormatter = remember { SimpleDateFormat("EEEE, MMM d", Locale.getDefault()) }
     val currentTime = remember(tickNow) { timeFormatter.format(Date(tickNow)) }
     val currentDate = remember(tickNow) { dateFormatter.format(Date(tickNow)) }
+    var workExpanded by remember { mutableStateOf(false) }
+
+    val primaryVisibleApps = remember(visibleApps, shouldBlock) {
+        if (shouldBlock) AppRepository.partitionPersonalAndWorkApps(visibleApps).first
+        else visibleApps
+    }
 
     Column(
         modifier = Modifier
@@ -847,8 +861,8 @@ private fun MinimalistHomeMainPage(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Typographic Distraction-Free App Rows
-        if (!shouldBlock && visibleApps.isEmpty()) {
+        // Typographic Distraction-Free App Rows + Optional Work Profile Dropdown
+        if (!shouldBlock && primaryVisibleApps.isEmpty() && workDropdownApps.isEmpty()) {
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -886,7 +900,17 @@ private fun MinimalistHomeMainPage(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                items(visibleApps, key = { it.packageName }) { app ->
+                if (!shouldBlock && primaryVisibleApps.isEmpty()) {
+                    item(key = "empty_pinned_hint") {
+                        Text(
+                            text = "No pinned essentials yet — tap Edit above or open Work Profile below.",
+                            color = TextMuted,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    }
+                }
+                items(primaryVisibleApps, key = { it.uniqueKey }) { app ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -903,13 +927,25 @@ private fun MinimalistHomeMainPage(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = app.appName,
-                            color = TextPrimary,
-                            fontSize = 21.sp,
-                            fontWeight = FontWeight.Light,
-                            letterSpacing = 0.2.sp
-                        )
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = app.appName,
+                                color = TextPrimary,
+                                fontSize = 21.sp,
+                                fontWeight = FontWeight.Light,
+                                letterSpacing = 0.2.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            if (app.isWorkProfile) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                WorkProfileBadge()
+                            }
+                        }
                         if (ultraFocusState.isTransitPassActive && sessionManager.isTransitEssentialApp(app.packageName)) {
                             Text(
                                 text = "TRANSIT",
@@ -1074,10 +1110,15 @@ private fun MinimalistAllAppsPage(
     onSelectApp: (AppInfo) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var workExpanded by remember { mutableStateOf(false) }
     val filteredApps = remember(searchQuery, allApps) {
         if (searchQuery.isBlank()) allApps
         else allApps.filter { it.appName.contains(searchQuery, ignoreCase = true) }
     }
+    val (personalApps, workApps) = remember(filteredApps) {
+        AppRepository.partitionPersonalAndWorkApps(filteredApps)
+    }
+    val effectiveWorkExpanded = workExpanded || searchQuery.isNotBlank()
 
     Column(
         modifier = Modifier
@@ -1161,39 +1202,92 @@ private fun MinimalistAllAppsPage(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            items(filteredApps, key = { it.packageName }) { app ->
-                val isPinned = homePinnedPackages.contains(app.packageName)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .combinedClickable(
-                            onClick = { onSelectApp(app) },
-                            onLongClick = { onOpenAppOptions(app) }
+            if (workApps.isNotEmpty()) {
+                item(key = "all_apps_work_dropdown") {
+                    WorkProfileDropdownHeader(
+                        count = workApps.size,
+                        expanded = effectiveWorkExpanded,
+                        onToggle = { workExpanded = !workExpanded }
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                if (effectiveWorkExpanded) {
+                    items(workApps, key = { "all_work_${it.uniqueKey}" }) { app ->
+                        MinimalistAllAppRow(
+                            app = app,
+                            isPinned = homePinnedPackages.contains(app.uniqueKey),
+                            onSelectApp = { onSelectApp(app) },
+                            onOpenAppOptions = { onOpenAppOptions(app) },
+                            onTogglePin = { onTogglePin(app) }
                         )
-                        .padding(horizontal = 2.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = app.appName,
-                        color = TextPrimary,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Light,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        text = if (isPinned) "PINNED" else "PIN",
-                        style = MicroLabelText,
-                        color = if (isPinned) EmeraldMint else TextMuted,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable { onTogglePin(app) }
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                    }
+                }
+                item(key = "all_apps_work_spacer") {
+                    Spacer(modifier = Modifier.height(6.dp))
                 }
             }
+            items(personalApps, key = { it.uniqueKey }) { app ->
+                MinimalistAllAppRow(
+                    app = app,
+                    isPinned = homePinnedPackages.contains(app.uniqueKey) ||
+                        (!app.isWorkProfile && homePinnedPackages.contains(app.packageName)),
+                    onSelectApp = { onSelectApp(app) },
+                    onOpenAppOptions = { onOpenAppOptions(app) },
+                    onTogglePin = { onTogglePin(app) }
+                )
+            }
         }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun MinimalistAllAppRow(
+    app: AppInfo,
+    isPinned: Boolean,
+    onSelectApp: () -> Unit,
+    onOpenAppOptions: () -> Unit,
+    onTogglePin: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .combinedClickable(
+                onClick = onSelectApp,
+                onLongClick = onOpenAppOptions
+            )
+            .padding(horizontal = 2.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = app.appName,
+                color = TextPrimary,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Light,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            if (app.isWorkProfile) {
+                Spacer(modifier = Modifier.width(8.dp))
+                WorkProfileBadge()
+            }
+        }
+        Text(
+            text = if (isPinned) "PINNED" else "PIN",
+            style = MicroLabelText,
+            color = if (isPinned) EmeraldMint else TextMuted,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(onClick = onTogglePin)
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        )
     }
 }
 

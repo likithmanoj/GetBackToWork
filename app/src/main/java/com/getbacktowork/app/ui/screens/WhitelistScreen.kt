@@ -66,6 +66,8 @@ import com.getbacktowork.app.data.AppInfo
 import com.getbacktowork.app.data.AppRepository
 import com.getbacktowork.app.data.FocusSessionManager
 import com.getbacktowork.app.ui.components.AppRuleConfigDialog
+import com.getbacktowork.app.ui.components.WorkProfileBadge
+import com.getbacktowork.app.ui.components.WorkProfileDropdownHeader
 import com.getbacktowork.app.ui.theme.BrandPrimary
 import com.getbacktowork.app.ui.theme.DarkSurface
 import com.getbacktowork.app.ui.theme.DarkSurfaceElevated
@@ -112,6 +114,7 @@ fun WhitelistScreen(
     var showSaveGroupDialog by remember { mutableStateOf(false) }
     var newGroupName by remember { mutableStateOf("") }
     var filterMode by remember { mutableIntStateOf(0) } // 0: All, 1: Allowed
+    var workExpanded by remember { mutableStateOf(false) }
     var editingRuleApp by remember { mutableStateOf<AppInfo?>(null) }
 
     LaunchedEffect(Unit) {
@@ -120,7 +123,13 @@ fun WhitelistScreen(
     }
 
     val resolvedApps = remember(apps, customAppNames) {
-        apps.map { it.copy(appName = sessionManager.resolveAppName(it.packageName, it.appName)) }
+        apps.map {
+            val resolvedName = sessionManager.resolveAppName(
+                it.uniqueKey,
+                sessionManager.resolveAppName(it.packageName, it.appName)
+            )
+            it.copy(appName = resolvedName)
+        }
     }
 
     val filteredApps = remember(resolvedApps, searchQuery, filterMode, allowedPackages) {
@@ -137,6 +146,10 @@ fun WhitelistScreen(
             )
         }
     }
+    val (personalFilteredApps, workFilteredApps) = remember(filteredApps) {
+        AppRepository.partitionPersonalAndWorkApps(filteredApps)
+    }
+    val effectiveWorkExpanded = workExpanded || searchQuery.isNotBlank()
 
     if (showSaveGroupDialog) {
         AlertDialog(
@@ -477,7 +490,7 @@ fun WhitelistScreen(
                 )
             }
         } else {
-            // Single clean grouped list instead of 60 stacked puffy gradient cards
+            // Single clean grouped list with expandable Work Profile dropdown when present
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -485,164 +498,58 @@ fun WhitelistScreen(
                     .background(DarkSurface)
                     .border(0.75.dp, HairlineBorder, RoundedCornerShape(18.dp))
             ) {
-                itemsIndexed(filteredApps, key = { _, it -> it.packageName }) { index, app ->
-                    val isDialer = app.packageName == defaultDialer ||
-                        app.packageName == "com.google.android.dialer" ||
-                        app.packageName == "com.samsung.android.dialer" ||
-                        app.packageName == "com.android.dialer" ||
-                        app.packageName == "com.android.phone"
-                    val isAllowed = isDialer || allowedPackages.contains(app.packageName)
-                    val appCap = appDailyCaps[app.packageName]
-                    val usage = appTodayUsage[app.packageName]
-                    val hasCooldown = cooldownPackages.contains(app.packageName)
-                    val ruleSummary = buildList {
-                        if (appCap != null && appCap.maxMinutesPerDay > 0) add("${appCap.maxMinutesPerDay}m/d")
-                        if (appCap != null && appCap.maxOpensPerDay > 0) add("${appCap.maxOpensPerDay}x/d")
-                        if (hasCooldown) add("Pause")
-                        if (usage != null && (usage.opens > 0 || usage.minutes > 0)) {
-                            add("Today ${usage.opens}x/${usage.minutes}m")
-                        }
-                    }.joinToString(" · ")
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .combinedClickable(
-                                enabled = !isDialer,
-                                onClick = {
-                                    if (isLocked) {
-                                        Toast.makeText(context, lockMessage, Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        sessionManager.toggleAppAllowed(app.packageName)
-                                    }
-                                },
-                                onLongClick = {
-                                    if (!isLocked) editingRuleApp = app
-                                }
+                if (workFilteredApps.isNotEmpty()) {
+                    item(key = "work_profile_dropdown") {
+                        WorkProfileDropdownHeader(
+                            count = workFilteredApps.size,
+                            expanded = effectiveWorkExpanded,
+                            onToggle = { workExpanded = !workExpanded },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                        )
+                    }
+                    if (effectiveWorkExpanded) {
+                        itemsIndexed(workFilteredApps, key = { _, it -> it.uniqueKey }) { index, app ->
+                            WhitelistAppRow(
+                                app = app,
+                                defaultDialer = defaultDialer,
+                                allowedPackages = allowedPackages,
+                                appDailyCaps = appDailyCaps,
+                                appTodayUsage = appTodayUsage,
+                                cooldownPackages = cooldownPackages,
+                                searchQuery = searchQuery,
+                                isLocked = isLocked,
+                                lockMessage = lockMessage,
+                                onToggleAllow = { sessionManager.toggleAppAllowed(app.packageName) },
+                                onOpenRules = { editingRuleApp = app }
                             )
-                            .padding(horizontal = 16.dp, vertical = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            modifier = Modifier.weight(1f),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(DarkSurfaceVariant),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (app.iconBitmap != null) {
-                                    Image(
-                                        bitmap = app.iconBitmap,
-                                        contentDescription = app.appName,
-                                        modifier = Modifier
-                                            .size(34.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                    )
-                                } else if (isDialer) {
-                                    Icon(
-                                        imageVector = Icons.Default.Phone,
-                                        contentDescription = "Phone",
-                                        tint = SuccessGreen,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                } else {
-                                    Text(
-                                        text = app.appName.take(1).uppercase(),
-                                        color = if (isAllowed) TextPrimary else TextMuted,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 15.sp
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.width(12.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = app.appName,
-                                    color = TextPrimary,
-                                    fontWeight = FontWeight.Medium,
-                                    fontSize = 15.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                if (isDialer) {
-                                    Text(
-                                        text = "Emergency calls always permitted",
-                                        color = EmeraldMint,
-                                        fontSize = 11.sp
-                                    )
-                                } else if (ruleSummary.isNotEmpty()) {
-                                    Text(
-                                        text = ruleSummary,
-                                        color = if (appCap != null || hasCooldown) BrandPrimary else TextMuted,
-                                        fontSize = 11.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                } else if (searchQuery.isNotBlank()) {
-                                    Text(
-                                        text = app.packageName,
-                                        color = TextMuted,
-                                        fontSize = 11.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
-
-                        if (!isDialer) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Box(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(CircleShape)
-                                    .clickable {
-                                        if (isLocked) {
-                                            Toast.makeText(context, lockMessage, Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            editingRuleApp = app
-                                        }
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Tune,
-                                    contentDescription = "Daily Caps & Rename",
-                                    tint = if (appCap != null || hasCooldown) BrandPrimary else TextMuted,
-                                    modifier = Modifier.size(16.dp)
+                            if (index < workFilteredApps.lastIndex || personalFilteredApps.isNotEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 66.dp)
+                                        .height(0.5.dp)
+                                        .background(HairlineBorder)
                                 )
                             }
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Switch(
-                                checked = isAllowed,
-                                enabled = !isLocked,
-                                onCheckedChange = {
-                                    if (isLocked) {
-                                        Toast.makeText(context, lockMessage, Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        sessionManager.toggleAppAllowed(app.packageName)
-                                    }
-                                },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = InkOnLight,
-                                    checkedTrackColor = IvoryAction,
-                                    uncheckedThumbColor = TextMuted,
-                                    uncheckedTrackColor = DarkSurfaceVariant,
-                                    disabledCheckedThumbColor = TextMuted,
-                                    disabledCheckedTrackColor = DarkSurfaceElevated
-                                )
-                            )
                         }
                     }
+                }
 
-                    if (index < filteredApps.lastIndex) {
+                itemsIndexed(personalFilteredApps, key = { _, it -> it.uniqueKey }) { index, app ->
+                    WhitelistAppRow(
+                        app = app,
+                        defaultDialer = defaultDialer,
+                        allowedPackages = allowedPackages,
+                        appDailyCaps = appDailyCaps,
+                        appTodayUsage = appTodayUsage,
+                        cooldownPackages = cooldownPackages,
+                        searchQuery = searchQuery,
+                        isLocked = isLocked,
+                        lockMessage = lockMessage,
+                        onToggleAllow = { sessionManager.toggleAppAllowed(app.packageName) },
+                        onOpenRules = { editingRuleApp = app }
+                    )
+                    if (index < personalFilteredApps.lastIndex) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -659,14 +566,14 @@ fun WhitelistScreen(
     editingRuleApp?.let { target ->
         AppRuleConfigDialog(
             app = target,
-            currentAlias = customAppNames[target.packageName].orEmpty(),
+            currentAlias = (customAppNames[target.uniqueKey] ?: customAppNames[target.packageName]).orEmpty(),
             currentCap = appDailyCaps[target.packageName],
             todayUsage = appTodayUsage[target.packageName] ?: FocusSessionManager.AppTodayUsage(target.packageName, ""),
             isCooldownEnabled = cooldownPackages.contains(target.packageName),
             showPinOption = false,
             onDismiss = { editingRuleApp = null },
             onSaveRules = { newAlias, maxMins, maxOpens ->
-                sessionManager.setCustomAppName(target.packageName, newAlias)
+                sessionManager.setCustomAppName(target.uniqueKey, newAlias)
                 sessionManager.setAppDailyCap(target.packageName, maxMins, maxOpens)
                 Toast.makeText(context, "Saved rules for ${target.appName}", Toast.LENGTH_SHORT).show()
                 editingRuleApp = null
@@ -684,5 +591,187 @@ fun WhitelistScreen(
                 editingRuleApp = null
             }
         )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WhitelistAppRow(
+    app: AppInfo,
+    defaultDialer: String?,
+    allowedPackages: Set<String>,
+    appDailyCaps: Map<String, FocusSessionManager.AppDailyCap>,
+    appTodayUsage: Map<String, FocusSessionManager.AppTodayUsage>,
+    cooldownPackages: Set<String>,
+    searchQuery: String,
+    isLocked: Boolean,
+    lockMessage: String,
+    onToggleAllow: () -> Unit,
+    onOpenRules: () -> Unit
+) {
+    val context = LocalContext.current
+    val isDialer = !app.isWorkProfile && (
+        app.packageName == defaultDialer ||
+            app.packageName == "com.google.android.dialer" ||
+            app.packageName == "com.samsung.android.dialer" ||
+            app.packageName == "com.android.dialer" ||
+            app.packageName == "com.android.phone"
+        )
+    val isAllowed = isDialer || allowedPackages.contains(app.packageName)
+    val appCap = appDailyCaps[app.packageName]
+    val usage = appTodayUsage[app.packageName]
+    val hasCooldown = cooldownPackages.contains(app.packageName)
+    val ruleSummary = buildList {
+        if (appCap != null && appCap.maxMinutesPerDay > 0) add("${appCap.maxMinutesPerDay}m/d")
+        if (appCap != null && appCap.maxOpensPerDay > 0) add("${appCap.maxOpensPerDay}x/d")
+        if (hasCooldown) add("Pause")
+        if (usage != null && (usage.opens > 0 || usage.minutes > 0)) {
+            add("Today ${usage.opens}x/${usage.minutes}m")
+        }
+    }.joinToString(" · ")
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                enabled = !isDialer,
+                onClick = {
+                    if (isLocked) {
+                        Toast.makeText(context, lockMessage, Toast.LENGTH_SHORT).show()
+                    } else {
+                        onToggleAllow()
+                    }
+                },
+                onLongClick = {
+                    if (!isLocked) onOpenRules()
+                }
+            )
+            .padding(horizontal = 16.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(DarkSurfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (app.iconBitmap != null) {
+                    Image(
+                        bitmap = app.iconBitmap,
+                        contentDescription = app.appName,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                    )
+                } else if (isDialer) {
+                    Icon(
+                        imageVector = Icons.Default.Phone,
+                        contentDescription = "Phone",
+                        tint = SuccessGreen,
+                        modifier = Modifier.size(18.dp)
+                    )
+                } else {
+                    Text(
+                        text = app.appName.take(1).uppercase(),
+                        color = if (isAllowed) TextPrimary else TextMuted,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = app.appName,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 15.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (app.isWorkProfile) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        WorkProfileBadge()
+                    }
+                }
+                if (isDialer) {
+                    Text(
+                        text = "Emergency calls always permitted",
+                        color = EmeraldMint,
+                        fontSize = 11.sp
+                    )
+                } else if (ruleSummary.isNotEmpty()) {
+                    Text(
+                        text = ruleSummary,
+                        color = if (appCap != null || hasCooldown) BrandPrimary else TextMuted,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else if (searchQuery.isNotBlank()) {
+                    Text(
+                        text = app.packageName,
+                        color = TextMuted,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+
+        if (!isDialer) {
+            Spacer(modifier = Modifier.width(4.dp))
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .clickable {
+                        if (isLocked) {
+                            Toast.makeText(context, lockMessage, Toast.LENGTH_SHORT).show()
+                        } else {
+                            onOpenRules()
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Tune,
+                    contentDescription = "Daily Caps & Rename",
+                    tint = if (appCap != null || hasCooldown) BrandPrimary else TextMuted,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            Switch(
+                checked = isAllowed,
+                enabled = !isLocked,
+                onCheckedChange = {
+                    if (isLocked) {
+                        Toast.makeText(context, lockMessage, Toast.LENGTH_SHORT).show()
+                    } else {
+                        onToggleAllow()
+                    }
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = InkOnLight,
+                    checkedTrackColor = IvoryAction,
+                    uncheckedThumbColor = TextMuted,
+                    uncheckedTrackColor = DarkSurfaceVariant,
+                    disabledCheckedThumbColor = TextMuted,
+                    disabledCheckedTrackColor = DarkSurfaceElevated
+                )
+            )
+        }
     }
 }
