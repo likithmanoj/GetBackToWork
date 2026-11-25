@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GetBackToWork</string>
+    <string name="accessibility_service_description">GetBackToWork requires Accessibility Service to detect when blocked or distracting apps are opened and protect your active focus sessions.</string>
+    <string name="device_admin_label">GetBackToWork Anti-Uninstall Protection</string>
+    <string name="device_admin_description">Prevents uninstalling or tampering with GetBackToWork while a focus session is in progress.</string>
+    <string name="notification_channel_name">Focus Session Active</string>
+    <string name="notification_channel_desc">Shows active focus timer countdown and status.</string>
+</resources>

@@ -1,0 +1,25 @@
+# Built application files & signing keys (keep local only)
+*.apk
+*.ap_
+*.aab
+*.jks
+*.keystore
+*.p12
+
+# Local machine SDK & signing config
+local.properties
+
+# Gradle, Kotlin & Android Studio artifacts
+.gradle/
+.kotlin/
+build/
+*/build/
+.idea/
+*.iml
+captures/
+*.hprof
+
+# OS files & local ADB verification screenshots
+.DS_Store
+**/.DS_Store
+screen_*.png

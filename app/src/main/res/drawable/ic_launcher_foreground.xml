@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Subtle inner track ring -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,32 A22,22 0 1,0 54,76 A22,22 0 1,0 54,32 Z"
+        android:strokeColor="#FF262A34"
+        android:strokeWidth="2.8" />
+
+    <!-- Primary Ivory 285-degree Precision Dial Arc (opening top-right from 12:00 to 2:30) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M75.25,48.30 A22,22 0 1,1 54,32"
+        android:strokeColor="#FFF4F4F5"
+        android:strokeLineCap="round"
+        android:strokeWidth="4.8" />
+
+    <!-- Focus Pointer Needle toward top-right aperture bisector (-52.5 deg) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,54 L62.2,43.3"
+        android:strokeColor="#FFF4F4F5"
+        android:strokeLineCap="round"
+        android:strokeWidth="3.4" />
+
+    <!-- Pivot Node -->
+    <path
+        android:fillColor="#FFF4F4F5"
+        android:pathData="M54,50.5 A3.5,3.5 0 1,0 54,57.5 A3.5,3.5 0 1,0 54,50.5 Z" />
+
+    <!-- Floating Amber Focal Beacon at gap center (67.39, 36.55) -->
+    <path
+        android:fillColor="#FFF59E0B"
+        android:pathData="M67.39,32.55 A4,4 0 1,0 67.39,40.55 A4,4 0 1,0 67.39,32.55 Z" />
+</vector>
