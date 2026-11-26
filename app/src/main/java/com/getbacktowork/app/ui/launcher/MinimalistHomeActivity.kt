@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -41,11 +42,13 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsBus
 import androidx.compose.material.icons.filled.Flight
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Whatshot
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -57,12 +60,14 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -70,6 +75,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -80,13 +87,16 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.getbacktowork.app.data.AppInfo
 import com.getbacktowork.app.data.AppRepository
 import com.getbacktowork.app.data.FocusSessionManager
+import com.getbacktowork.app.service.AppBlockerAccessibilityService
 import com.getbacktowork.app.ui.MainActivity
 import com.getbacktowork.app.ui.components.AppRuleConfigDialog
+import com.getbacktowork.app.ui.components.LauncherWallpaperDialog
 import com.getbacktowork.app.ui.components.WorkProfileBadge
 import com.getbacktowork.app.ui.components.WorkProfileDropdownHeader
 import com.getbacktowork.app.ui.overlay.BlockingOverlayActivity
@@ -209,6 +219,39 @@ private fun MinimalistHomeContent(
     val appDailyCaps by sessionManager.appDailyCapsFlow.collectAsState()
     val appTodayUsage by sessionManager.appTodayUsageFlow.collectAsState()
     val earnedScrollUntil by sessionManager.earnedScrollUntilFlow.collectAsState()
+    val wallpaperState by sessionManager.launcherWallpaperStateFlow.collectAsState()
+    val pausedForBanking by sessionManager.accessibilityPausedForBankingFlow.collectAsState()
+
+    var isAccessibilityEnabled by remember {
+        mutableStateOf(AppBlockerAccessibilityService.isAccessibilityServiceEnabled(context))
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val enabledNow = AppBlockerAccessibilityService.isAccessibilityServiceEnabled(context)
+                isAccessibilityEnabled = enabledNow
+                if (enabledNow && sessionManager.isAccessibilityPausedForBanking()) {
+                    sessionManager.setAccessibilityPausedForBanking(false)
+                    AppBlockerAccessibilityService.cancelBankingPauseNotification(context)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val wallpaperBitmap by produceState<ImageBitmap?>(
+        initialValue = null,
+        wallpaperState.isEnabled,
+        wallpaperState.version
+    ) {
+        value = if (wallpaperState.isEnabled && LauncherWallpaperStore.hasSavedWallpaperFile(context)) {
+            LauncherWallpaperStore.loadWallpaperBitmap(context)
+        } else {
+            null
+        }
+    }
 
     var installedApps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
     var allowedApps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
@@ -216,6 +259,7 @@ private fun MinimalistHomeContent(
     var showEmergencyPassDialog by remember { mutableStateOf(false) }
     var showRealityCheckDialog by remember { mutableStateOf(false) }
     var showEditPinnedDialog by remember { mutableStateOf(false) }
+    var showWallpaperDialog by remember { mutableStateOf(false) }
     var pausedTargetApp by remember { mutableStateOf<AppInfo?>(null) }
     var actionTargetApp by remember { mutableStateOf<AppInfo?>(null) }
 
@@ -266,6 +310,7 @@ private fun MinimalistHomeContent(
                 sessionManager.refreshUltraFocusState()
                 sessionManager.refreshTravelState()
                 sessionManager.refreshScheduleState()
+                isAccessibilityEnabled = AppBlockerAccessibilityService.isAccessibilityServiceEnabled(context)
                 delay(1000L)
             }
         }
@@ -304,42 +349,121 @@ private fun MinimalistHomeContent(
         modifier = Modifier.fillMaxSize(),
         color = DarkBackground
     ) {
-        HorizontalPager(
-            state = pagerState,
-            userScrollEnabled = !shouldBlock,
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-        ) { page ->
-            if (page == 0) {
-                MinimalistHomeMainPage(
-                    tickNow = tickNow,
-                    shouldBlock = shouldBlock,
-                    isUltraFocus = isUltraFocus,
-                    sessionState = sessionState,
-                    ultraFocusState = ultraFocusState,
-                    holidayState = holidayState,
-                    travelState = travelState,
-                    advice = advice,
-                    yearDaysLeft = "${yearProgress.daysRemaining}d left in ${yearProgress.year}",
-                    topLifeGoal = lifeGoals.firstOrNull().orEmpty(),
-                    visibleApps = homeVisibleApps,
-                    workDropdownApps = if (shouldBlock) {
-                        AppRepository.partitionPersonalAndWorkApps(allowedApps).second
-                    } else {
-                        allWorkApps
-                    },
-                    sessionManager = sessionManager,
-                    onOpenDashboard = onOpenDashboard,
-                    onOpenEditPinned = { showEditPinnedDialog = true },
-                    onStartQuickFocus = { sessionManager.startSession(25, strictMode = true) },
-                    onOpenPhone = onOpenPhone,
-                    onOpenCamera = onOpenCamera,
-                    onOpenApp = { app ->
-                        if (shouldBlock) {
-                            onLaunchApp(app)
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (wallpaperState.isEnabled && wallpaperBitmap != null) {
+                Image(
+                    bitmap = wallpaperBitmap!!,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Color.Black.copy(
+                                alpha = wallpaperState.effectiveDimAlpha(shouldBlock)
+                            )
+                        )
+                )
+            }
+
+            HorizontalPager(
+                state = pagerState,
+                userScrollEnabled = !shouldBlock,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+            ) { page ->
+                if (page == 0) {
+                    MinimalistHomeMainPage(
+                        tickNow = tickNow,
+                        shouldBlock = shouldBlock,
+                        isUltraFocus = isUltraFocus,
+                        sessionState = sessionState,
+                        ultraFocusState = ultraFocusState,
+                        holidayState = holidayState,
+                        travelState = travelState,
+                        advice = advice,
+                        yearDaysLeft = "${yearProgress.daysRemaining}d left in ${yearProgress.year}",
+                        topLifeGoal = lifeGoals.firstOrNull().orEmpty(),
+                        visibleApps = homeVisibleApps,
+                        workDropdownApps = if (shouldBlock) {
+                            AppRepository.partitionPersonalAndWorkApps(allowedApps).second
                         } else {
+                            allWorkApps
+                        },
+                        sessionManager = sessionManager,
+                        isAccessibilityEnabled = isAccessibilityEnabled,
+                        isAccessibilityPausedForBanking = pausedForBanking,
+                        onPauseAccessibilityForBanking = {
+                            val paused = AppBlockerAccessibilityService.pauseForBanking(context)
+                            isAccessibilityEnabled = AppBlockerAccessibilityService.isAccessibilityServiceEnabled(context)
+                            Toast.makeText(
+                                context,
+                                if (paused) "Shield paused — UPI/banking apps unlocked. Tap banner to re-enable."
+                                else "Cannot pause shield while Focus or Cold Turkey lock is active.",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        onEnableAccessibility = {
+                            AppBlockerAccessibilityService.openAccessibilitySettings(context)
+                        },
+                        onOpenDashboard = onOpenDashboard,
+                        onOpenWallpaper = { showWallpaperDialog = true },
+                        onOpenEditPinned = { showEditPinnedDialog = true },
+                        onStartQuickFocus = { sessionManager.startSession(25, strictMode = true) },
+                        onOpenPhone = onOpenPhone,
+                        onOpenCamera = onOpenCamera,
+                        onOpenApp = { app ->
+                            if (shouldBlock) {
+                                onLaunchApp(app)
+                            } else {
+                                handleIdleAppTap(
+                                    app = app,
+                                    sessionManager = sessionManager,
+                                    onImmediateLaunch = { onLaunchApp(app) },
+                                    onRequirePause = { pausedTargetApp = app }
+                                )
+                            }
+                        },
+                        onOpenAppOptions = { app -> actionTargetApp = app },
+                        onOpenPassOrReality = {
+                            if (isUltraFocus) showRealityCheckDialog = true
+                            else showEmergencyPassDialog = true
+                        },
+                        onOpenAllApps = {
+                            if (!shouldBlock) {
+                                coroutineScope.launch { pagerState.animateScrollToPage(1) }
+                            }
+                        }
+                    )
+                } else {
+                    MinimalistAllAppsPage(
+                        allApps = installedApps,
+                        homePinnedPackages = effectivePinnedPackages,
+                        onTogglePin = { app ->
+                            val fallbackKeys = if (!isHomePinnedCustomized) {
+                                fallbackHomeApps.map { it.uniqueKey }
+                            } else {
+                                emptyList()
+                            }
+                            val pinned = sessionManager.toggleHomePinnedPackage(
+                                packageName = app.uniqueKey,
+                                initialFallbackPackages = fallbackKeys
+                            )
+                            Toast.makeText(
+                                context,
+                                if (pinned) "Pinned ${app.appName} to Homescreen" else "Unpinned ${app.appName}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        onOpenAppOptions = { app -> actionTargetApp = app },
+                        onBackHome = {
+                            coroutineScope.launch { pagerState.animateScrollToPage(0) }
+                        },
+                        onSelectApp = { app ->
                             handleIdleAppTap(
                                 app = app,
                                 sessionManager = sessionManager,
@@ -347,51 +471,8 @@ private fun MinimalistHomeContent(
                                 onRequirePause = { pausedTargetApp = app }
                             )
                         }
-                    },
-                    onOpenAppOptions = { app -> actionTargetApp = app },
-                    onOpenPassOrReality = {
-                        if (isUltraFocus) showRealityCheckDialog = true
-                        else showEmergencyPassDialog = true
-                    },
-                    onOpenAllApps = {
-                        if (!shouldBlock) {
-                            coroutineScope.launch { pagerState.animateScrollToPage(1) }
-                        }
-                    }
-                )
-            } else {
-                MinimalistAllAppsPage(
-                    allApps = installedApps,
-                    homePinnedPackages = effectivePinnedPackages,
-                    onTogglePin = { app ->
-                        val fallbackKeys = if (!isHomePinnedCustomized) {
-                            fallbackHomeApps.map { it.uniqueKey }
-                        } else {
-                            emptyList()
-                        }
-                        val pinned = sessionManager.toggleHomePinnedPackage(
-                            packageName = app.uniqueKey,
-                            initialFallbackPackages = fallbackKeys
-                        )
-                        Toast.makeText(
-                            context,
-                            if (pinned) "Pinned ${app.appName} to Homescreen" else "Unpinned ${app.appName}",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    },
-                    onOpenAppOptions = { app -> actionTargetApp = app },
-                    onBackHome = {
-                        coroutineScope.launch { pagerState.animateScrollToPage(0) }
-                    },
-                    onSelectApp = { app ->
-                        handleIdleAppTap(
-                            app = app,
-                            sessionManager = sessionManager,
-                            onImmediateLaunch = { onLaunchApp(app) },
-                            onRequirePause = { pausedTargetApp = app }
-                        )
-                    }
-                )
+                    )
+                }
             }
         }
     }
@@ -496,6 +577,13 @@ private fun MinimalistHomeContent(
             }
         )
     }
+
+    if (showWallpaperDialog) {
+        LauncherWallpaperDialog(
+            sessionManager = sessionManager,
+            onDismiss = { showWallpaperDialog = false }
+        )
+    }
 }
 
 private fun handleIdleAppTap(
@@ -533,7 +621,12 @@ private fun MinimalistHomeMainPage(
     visibleApps: List<AppInfo>,
     workDropdownApps: List<AppInfo>,
     sessionManager: FocusSessionManager,
+    isAccessibilityEnabled: Boolean,
+    isAccessibilityPausedForBanking: Boolean,
+    onPauseAccessibilityForBanking: () -> Unit,
+    onEnableAccessibility: () -> Unit,
     onOpenDashboard: () -> Unit,
+    onOpenWallpaper: () -> Unit,
     onOpenEditPinned: () -> Unit,
     onStartQuickFocus: () -> Unit,
     onOpenPhone: () -> Unit,
@@ -583,6 +676,22 @@ private fun MinimalistHomeMainPage(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!shouldBlock) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(DarkSurface)
+                            .border(0.75.dp, HairlineBorder, CircleShape)
+                            .clickable { onOpenWallpaper() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Image,
+                            contentDescription = "Launcher Wallpaper",
+                            tint = TextPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                     Box(
                         modifier = Modifier
                             .size(38.dp)
@@ -817,7 +926,106 @@ private fun MinimalistHomeMainPage(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        // Single-tap Banking / UPI Accessibility Pause & Re-enable Strip
+        if (!isAccessibilityEnabled) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(DarkSurface)
+                    .border(
+                        0.75.dp,
+                        if (isAccessibilityPausedForBanking) BrandPrimary.copy(alpha = 0.55f) else SignalCoral.copy(alpha = 0.55f),
+                        RoundedCornerShape(12.dp)
+                    )
+                    .clickable { onEnableAccessibility() }
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Shield,
+                        contentDescription = null,
+                        tint = if (isAccessibilityPausedForBanking) BrandPrimary else SignalCoral,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = if (isAccessibilityPausedForBanking) "Shield Paused for UPI/Banking" else "Accessibility Shield Off",
+                            color = TextPrimary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Tap to re-enable GetBackToWork in Settings",
+                            color = TextSecondary,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(IvoryAction)
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        text = "Enable",
+                        color = InkOnLight,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        } else if (!shouldBlock) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(DarkSurface)
+                    .border(0.75.dp, HairlineBorder, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(EmeraldMint)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Accessibility Shield On",
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                Text(
+                    text = "Pause for UPI",
+                    color = BrandPrimary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(DarkSurfaceVariant)
+                        .border(0.5.dp, BrandPrimary.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                        .clickable { onPauseAccessibilityForBanking() }
+                        .padding(horizontal = 9.dp, vertical = 4.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),

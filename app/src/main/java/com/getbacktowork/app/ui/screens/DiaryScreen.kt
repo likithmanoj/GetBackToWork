@@ -146,7 +146,7 @@ fun DiaryScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 12.dp)
     ) {
-        // Header + Streak Pill
+        // Minimalist Editorial Header + Streak Pill
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -154,24 +154,25 @@ fun DiaryScreen(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Focus Diary",
-                    color = TextPrimary,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = (-0.6).sp
+                    text = "Last 7 days",
+                    color = TextMuted,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "Keep screen use below ${dailyGoal}m and log deep work daily.",
-                    color = TextSecondary,
-                    fontSize = 13.sp
+                    text = "Focus Diary",
+                    color = Color.White,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.8).sp
                 )
             }
 
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(if (streakDays > 0) BrandPrimary.copy(alpha = 0.14f) else DarkSurfaceVariant)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(DarkSurfaceVariant)
                     .padding(horizontal = 12.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {

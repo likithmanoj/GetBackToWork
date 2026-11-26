@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Flight
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
@@ -106,6 +107,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.getbacktowork.app.data.AppInfo
 import com.getbacktowork.app.data.AppRepository
 import com.getbacktowork.app.data.FocusSessionManager
+import com.getbacktowork.app.ui.components.LauncherWallpaperDialog
+import com.getbacktowork.app.ui.launcher.LauncherWallpaperStore
 import com.getbacktowork.app.ui.launcher.MinimalistHomeActivity
 import com.getbacktowork.app.ui.launcher.PinnedEssentialsEditorDialog
 import com.getbacktowork.app.ui.launcher.resolveDefaultEssentialApps
@@ -167,6 +170,7 @@ fun TimerScreen(
     val homePinnedOrder by sessionManager.homePinnedOrderFlow.collectAsState()
     val isHomePinnedCustomized by sessionManager.homePinnedCustomizedFlow.collectAsState()
     val customAppNames by sessionManager.customAppNamesFlow.collectAsState()
+    val launcherWallpaperState by sessionManager.launcherWallpaperStateFlow.collectAsState()
     val diaryEntries by sessionManager.diaryEntriesFlow.collectAsState()
     val dailyGoal by sessionManager.dailyScreenGoalFlow.collectAsState()
 
@@ -189,6 +193,7 @@ fun TimerScreen(
     var allInstalledAppsForLauncher by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
     var isLoadingLauncherApps by remember { mutableStateOf(false) }
     var showPinnedEditorDialog by remember { mutableStateOf(false) }
+    var showWallpaperDialog by remember { mutableStateOf(false) }
     var showEmergencyPassDialog by remember { mutableStateOf(false) }
     var showRealityCheckDialog by remember { mutableStateOf(false) }
     var showReflectionsDialog by remember { mutableStateOf(false) }
@@ -456,6 +461,62 @@ fun TimerScreen(
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
                                         text = "Edit",
+                                        color = TextSecondary,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(0.5.dp)
+                                    .background(HairlineBorder)
+                            )
+                            val hasWallpaperFile = remember(launcherWallpaperState.version, launcherWallpaperState.isEnabled) {
+                                LauncherWallpaperStore.hasSavedWallpaperFile(context)
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showWallpaperDialog = true }
+                                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Launcher Wallpaper",
+                                        color = TextPrimary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = if (launcherWallpaperState.isEnabled && hasWallpaperFile) {
+                                            "Custom Photo • ${launcherWallpaperState.dimPercent}% dim"
+                                        } else {
+                                            "Pure OLED Black (Default)"
+                                        },
+                                        color = TextMuted,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(DarkSurfaceVariant)
+                                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Image,
+                                        contentDescription = "Launcher Wallpaper",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (launcherWallpaperState.isEnabled && hasWallpaperFile) "Edit" else "Set",
                                         color = TextSecondary,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Medium
@@ -975,6 +1036,13 @@ fun TimerScreen(
             }
         )
     }
+
+    if (showWallpaperDialog) {
+        LauncherWallpaperDialog(
+            sessionManager = sessionManager,
+            onDismiss = { showWallpaperDialog = false }
+        )
+    }
 }
 
 /**
@@ -1010,39 +1078,17 @@ fun HeroFocusDial(
     )
 
     Box(
-        modifier = modifier.size(236.dp),
+        modifier = modifier.size(252.dp),
         contentAlignment = Alignment.Center
     ) {
-        Canvas(modifier = Modifier.fillMaxSize().padding(10.dp)) {
-            val strokeWidth = 7.dp.toPx()
+        Canvas(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+            val strokeWidth = 12.dp.toPx()
             val radius = (size.minDimension - strokeWidth) / 2f
             val center = Offset(size.width / 2f, size.height / 2f)
 
-            // 24 subtle hour/quarter index ticks inside the track
-            val tickCount = 24
-            val innerR = radius - strokeWidth / 2f - 8.dp.toPx()
-            val outerR = radius - strokeWidth / 2f - 4.dp.toPx()
-            for (i in 0 until tickCount) {
-                val angleRad = Math.toRadians((i * (360f / tickCount)) - 90.0)
-                val isQuarter = i % 6 == 0
-                drawLine(
-                    color = Color.White.copy(alpha = if (isQuarter) 0.25f else 0.08f),
-                    start = Offset(
-                        center.x + (innerR * Math.cos(angleRad)).toFloat(),
-                        center.y + (innerR * Math.sin(angleRad)).toFloat()
-                    ),
-                    end = Offset(
-                        center.x + (outerR * Math.cos(angleRad)).toFloat(),
-                        center.y + (outerR * Math.sin(angleRad)).toFloat()
-                    ),
-                    strokeWidth = if (isQuarter) 1.5.dp.toPx() else 1.dp.toPx(),
-                    cap = StrokeCap.Round
-                )
-            }
-
-            // Clean track ring
+            // Clean minimalist track ring
             drawCircle(
-                color = DarkSurfaceVariant,
+                color = Color(0xFF1A1A1C),
                 radius = radius,
                 center = center,
                 style = Stroke(width = strokeWidth)
@@ -1063,14 +1109,15 @@ fun HeroFocusDial(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 text = timeText,
-                style = TimerDisplayText,
-                color = TextPrimary,
+                style = TimerDisplayText.copy(fontSize = 60.sp, lineHeight = 64.sp),
+                color = Color.White,
                 maxLines = 1
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = subLabel.uppercase(),
-                style = MicroLabelText,
+                text = subLabel,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
                 color = if (isSessionActive) accentColor else TextMuted
             )
         }
@@ -1087,7 +1134,7 @@ fun ModeSwitcherPill(
         modifier = modifier
             .fillMaxWidth()
             .height(44.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(DarkSurface)
             .border(0.75.dp, HairlineBorder, RoundedCornerShape(14.dp))
             .padding(4.dp),

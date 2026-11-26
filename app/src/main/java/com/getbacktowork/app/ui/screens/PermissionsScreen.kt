@@ -1,6 +1,5 @@
 package com.getbacktowork.app.ui.screens
 
-import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.admin.DevicePolicyManager
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -11,8 +10,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
-import android.view.accessibility.AccessibilityManager
 import android.widget.Toast
+import com.getbacktowork.app.service.AppBlockerAccessibilityService
 import com.getbacktowork.app.ui.launcher.MinimalistHomeActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1212,9 +1211,7 @@ private fun HairlineDivider() {
 }
 
 private fun checkAccessibility(context: Context): Boolean {
-    val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager ?: return false
-    val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-    return enabledServices.any { it.resolveInfo.serviceInfo.packageName == context.packageName }
+    return AppBlockerAccessibilityService.isAccessibilityServiceEnabled(context)
 }
 
 private fun checkOverlay(context: Context): Boolean {

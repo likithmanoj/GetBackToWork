@@ -171,6 +171,22 @@ class FocusSessionManager internal constructor(
         val detail: String
     )
 
+    data class LauncherWallpaperState(
+        val isEnabled: Boolean = false,
+        val dimPercent: Int = DEFAULT_WALLPAPER_DIM_PERCENT,
+        val version: Long = 0L
+    ) {
+        /** Computes the black scrim opacity, enforcing stronger dimming during active lock modes. */
+        fun effectiveDimAlpha(isLockActive: Boolean): Float {
+            val effectivePct = if (isLockActive) {
+                dimPercent.coerceAtLeast(LOCK_MODE_MIN_WALLPAPER_DIM_PERCENT)
+            } else {
+                dimPercent
+            }
+            return effectivePct.coerceIn(0, MAX_WALLPAPER_DIM_PERCENT) / 100f
+        }
+    }
+
     private val _sessionState = MutableStateFlow(getCurrentState())
     val sessionState: StateFlow<SessionState> = _sessionState.asStateFlow()
 
@@ -264,9 +280,18 @@ class FocusSessionManager internal constructor(
     private val _shieldDiagnosticsFlow = MutableStateFlow(getShieldDiagnostics())
     val shieldDiagnosticsFlow: StateFlow<List<ShieldDiagnosticEvent>> = _shieldDiagnosticsFlow.asStateFlow()
 
+    private val _launcherWallpaperStateFlow = MutableStateFlow(getLauncherWallpaperState())
+    val launcherWallpaperStateFlow: StateFlow<LauncherWallpaperState> = _launcherWallpaperStateFlow.asStateFlow()
+
+    private val _accessibilityPausedForBankingFlow = MutableStateFlow(isAccessibilityPausedForBanking())
+    val accessibilityPausedForBankingFlow: StateFlow<Boolean> = _accessibilityPausedForBankingFlow.asStateFlow()
+
     companion object {
         const val LIMIT_TYPE_REELS = "REELS"
         const val LIMIT_TYPE_MINUTES = "MINUTES"
+        const val DEFAULT_WALLPAPER_DIM_PERCENT = 65
+        const val MAX_WALLPAPER_DIM_PERCENT = 90
+        const val LOCK_MODE_MIN_WALLPAPER_DIM_PERCENT = 70
 
         private const val KEY_IS_ACTIVE = "key_is_active"
         private const val KEY_END_TIME = "key_end_time"
@@ -320,6 +345,10 @@ class FocusSessionManager internal constructor(
         private const val KEY_HOME_PINNED_PACKAGES = "key_home_pinned_packages"
         private const val KEY_HOME_PINNED_ORDER = "key_home_pinned_order"
         private const val KEY_HOME_PINNED_CUSTOMIZED = "key_home_pinned_customized"
+        private const val KEY_LAUNCHER_WALLPAPER_ENABLED = "key_launcher_wallpaper_enabled"
+        private const val KEY_LAUNCHER_WALLPAPER_DIM = "key_launcher_wallpaper_dim"
+        private const val KEY_LAUNCHER_WALLPAPER_VERSION = "key_launcher_wallpaper_version"
+        private const val KEY_ACCESSIBILITY_PAUSED_BANKING = "key_accessibility_paused_banking"
 
         private const val KEY_LIFE_GOALS = "key_life_goals"
         private const val KEY_WORK_SCHED_ENABLED = "key_work_sched_enabled"
@@ -1649,6 +1678,76 @@ class FocusSessionManager internal constructor(
         _homePinnedPackagesFlow.value = getHomePinnedPackages()
         _homePinnedOrderFlow.value = getHomePinnedOrder()
         _homePinnedCustomizedFlow.value = isHomePinnedCustomized()
+    }
+
+    // -------------------------------------------------------------
+    // MINIMALIST LAUNCHER WALLPAPER (Opt-in Photo + Readability Scrim)
+    // -------------------------------------------------------------
+
+    fun getLauncherWallpaperState(): LauncherWallpaperState {
+        return LauncherWallpaperState(
+            isEnabled = prefs.getBoolean(KEY_LAUNCHER_WALLPAPER_ENABLED, false),
+            dimPercent = prefs.getInt(KEY_LAUNCHER_WALLPAPER_DIM, DEFAULT_WALLPAPER_DIM_PERCENT)
+                .coerceIn(0, MAX_WALLPAPER_DIM_PERCENT),
+            version = prefs.getLong(KEY_LAUNCHER_WALLPAPER_VERSION, 0L)
+        )
+    }
+
+    fun setLauncherWallpaperEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_LAUNCHER_WALLPAPER_ENABLED, enabled).commit()
+        refreshLauncherWallpaperState()
+    }
+
+    fun setLauncherWallpaperDimPercent(percent: Int) {
+        val clamped = percent.coerceIn(0, MAX_WALLPAPER_DIM_PERCENT)
+        prefs.edit().putInt(KEY_LAUNCHER_WALLPAPER_DIM, clamped).commit()
+        refreshLauncherWallpaperState()
+    }
+
+    fun markLauncherWallpaperUpdated(enabled: Boolean = true) {
+        val prevVersion = prefs.getLong(KEY_LAUNCHER_WALLPAPER_VERSION, 0L)
+        val nextVersion = maxOf(clock(), prevVersion + 1L)
+        prefs.edit()
+            .putBoolean(KEY_LAUNCHER_WALLPAPER_ENABLED, enabled)
+            .putLong(KEY_LAUNCHER_WALLPAPER_VERSION, nextVersion)
+            .commit()
+        refreshLauncherWallpaperState()
+    }
+
+    fun clearLauncherWallpaper() {
+        val prevVersion = prefs.getLong(KEY_LAUNCHER_WALLPAPER_VERSION, 0L)
+        prefs.edit()
+            .putBoolean(KEY_LAUNCHER_WALLPAPER_ENABLED, false)
+            .putLong(KEY_LAUNCHER_WALLPAPER_VERSION, prevVersion + 1L)
+            .commit()
+        refreshLauncherWallpaperState()
+    }
+
+    private fun refreshLauncherWallpaperState() {
+        _launcherWallpaperStateFlow.value = getLauncherWallpaperState()
+    }
+
+    // -------------------------------------------------------------
+    // UPI / BANKING ACCESSIBILITY PAUSE STATE
+    // -------------------------------------------------------------
+
+    fun canPauseAccessibilityForBanking(): Boolean = !shouldBlockApps()
+
+    fun isAccessibilityPausedForBanking(): Boolean {
+        return prefs.getBoolean(KEY_ACCESSIBILITY_PAUSED_BANKING, false)
+    }
+
+    /**
+     * Marks whether the user temporarily paused the Accessibility Service for UPI/banking apps.
+     * Refuses to enter paused state while Focus / Cold Turkey / Work-Sleep lock is active.
+     */
+    fun setAccessibilityPausedForBanking(paused: Boolean): Boolean {
+        if (paused && !canPauseAccessibilityForBanking()) {
+            return false
+        }
+        prefs.edit().putBoolean(KEY_ACCESSIBILITY_PAUSED_BANKING, paused).commit()
+        _accessibilityPausedForBankingFlow.value = paused
+        return true
     }
 
     fun addScreenMinutesUsed(minutes: Int = 1, isDistracting: Boolean = false) {

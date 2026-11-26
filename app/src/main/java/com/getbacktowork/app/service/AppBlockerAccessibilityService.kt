@@ -1,17 +1,28 @@
 package com.getbacktowork.app.service
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.getbacktowork.app.R
 import com.getbacktowork.app.data.FocusSessionManager
 import com.getbacktowork.app.ui.overlay.BlockingOverlayActivity
 import com.getbacktowork.app.ui.overlay.CooldownPromptActivity
@@ -56,6 +67,108 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "GetBackToWork"
+        private const val SHIELD_PAUSE_CHANNEL_ID = "shield_pause_channel"
+        private const val SHIELD_PAUSE_NOTIFICATION_ID = 1003
+
+        @Volatile
+        private var activeInstance: AppBlockerAccessibilityService? = null
+
+        /** Single source of truth checking whether GetBackToWork's AccessibilityService is active. */
+        fun isAccessibilityServiceEnabled(context: Context): Boolean {
+            val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager ?: return false
+            val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            return enabledServices.any { it.resolveInfo?.serviceInfo?.packageName == context.packageName }
+        }
+
+        /** Opens Android's Accessibility Settings so the user can toggle the shield back on in one tap. */
+        fun openAccessibilitySettings(context: Context) {
+            try {
+                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                })
+            } catch (_: Exception) {
+                try {
+                    context.startActivity(Intent(Settings.ACTION_SETTINGS).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    })
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        /**
+         * Disables this AccessibilityService cleanly via API 24+ `disableSelf()` when unlocked so
+         * UPI/banking apps (e.g. BHIM) don't block access, and posts a quick re-enable notification.
+         */
+        fun pauseForBanking(context: Context): Boolean {
+            val sessionManager = FocusSessionManager.getInstance(context)
+            if (!sessionManager.setAccessibilityPausedForBanking(true)) {
+                return false
+            }
+            sessionManager.recordShieldDiagnostic(
+                "BANKING_PAUSE",
+                context.packageName,
+                "Accessibility disabled by user for UPI/banking"
+            )
+            postBankingPauseNotification(context)
+            val service = activeInstance
+            return if (service != null) {
+                service.disableSelf()
+                activeInstance = null
+                true
+            } else {
+                !isAccessibilityServiceEnabled(context)
+            }
+        }
+
+        fun cancelBankingPauseNotification(context: Context) {
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                nm?.cancel(SHIELD_PAUSE_NOTIFICATION_ID)
+            } catch (_: Exception) {
+            }
+        }
+
+        private fun postBankingPauseNotification(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+                val channel = NotificationChannel(
+                    SHIELD_PAUSE_CHANNEL_ID,
+                    "Banking Pause Reminder",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Quick shortcut to re-enable Focus Shield after banking/UPI payments"
+                }
+                nm.createNotificationChannel(channel)
+
+                val settingsIntent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                val pendingIntent = PendingIntent.getActivity(
+                    context,
+                    SHIELD_PAUSE_NOTIFICATION_ID,
+                    settingsIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+
+                val notification = NotificationCompat.Builder(context, SHIELD_PAUSE_CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_quick_tile)
+                    .setContentTitle("Focus Shield paused for banking/UPI")
+                    .setContentText("Tap here after your payment to re-enable Accessibility.")
+                    .setOngoing(false)
+                    .setAutoCancel(false)
+                    .setContentIntent(pendingIntent)
+                    .build()
+                nm.notify(SHIELD_PAUSE_NOTIFICATION_ID, notification)
+            } catch (_: SecurityException) {
+            } catch (_: Exception) {
+            }
+        }
 
         private val ADULT_DOMAINS = listOf(
             "pornhub", "xvideos", "xnxx", "redtube", "youporn",
@@ -408,7 +521,29 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         startHolidayTimeTicker()
     }
 
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        activeInstance = this
+        sessionManager.setAccessibilityPausedForBanking(false)
+        cancelBankingPauseNotification(this)
+        sessionManager.recordShieldDiagnostic(
+            "SHIELD_ACTIVE",
+            packageName,
+            "Accessibility service connected"
+        )
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
+        return super.onUnbind(intent)
+    }
+
     override fun onDestroy() {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         tickerJob?.cancel()
         settingsCheckJob?.cancel()
         serviceScope.cancel()

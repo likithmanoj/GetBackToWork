@@ -1071,4 +1071,82 @@ class FocusLogicTest {
         )
         assertEquals(listOf(workOutlook, personalOutlook), bothPinned)
     }
+
+    @Test
+    fun testLauncherWallpaperStateDimClampingAndLifecycle() {
+        var now = 1_000_000L
+        val prefs = InMemorySharedPreferences()
+        val manager = FocusSessionManager(
+            context = null,
+            prefs = prefs,
+            clock = { now },
+            startTimerService = {},
+            stopTimerService = {}
+        )
+
+        val initial = manager.getLauncherWallpaperState()
+        assertFalse(initial.isEnabled)
+        assertEquals(FocusSessionManager.DEFAULT_WALLPAPER_DIM_PERCENT, initial.dimPercent)
+        assertEquals(0L, initial.version)
+
+        manager.markLauncherWallpaperUpdated(enabled = true)
+        val afterUpload = manager.getLauncherWallpaperState()
+        assertTrue(afterUpload.isEnabled)
+        assertEquals(1_000_000L, afterUpload.version)
+
+        // Dim below lock-mode minimum is raised when Focus/Cold Turkey lock is active
+        manager.setLauncherWallpaperDimPercent(20)
+        val lowDim = manager.getLauncherWallpaperState()
+        assertEquals(20, lowDim.dimPercent)
+        assertEquals(0.20f, lowDim.effectiveDimAlpha(isLockActive = false), 0.001f)
+        assertEquals(0.70f, lowDim.effectiveDimAlpha(isLockActive = true), 0.001f)
+
+        // Values above MAX_WALLPAPER_DIM_PERCENT are clamped to 90%
+        manager.setLauncherWallpaperDimPercent(150)
+        assertEquals(90, manager.getLauncherWallpaperState().dimPercent)
+
+        // Negative values are clamped to 0%
+        manager.setLauncherWallpaperDimPercent(-10)
+        assertEquals(0, manager.getLauncherWallpaperState().dimPercent)
+
+        // Disabling preserves dim and lets user toggle back to Pure OLED Black
+        manager.setLauncherWallpaperEnabled(false)
+        assertFalse(manager.getLauncherWallpaperState().isEnabled)
+
+        // Clearing disables and increments version so UI drops cached bitmap
+        now += 5_000L
+        manager.markLauncherWallpaperUpdated(enabled = true)
+        val v2 = manager.getLauncherWallpaperState().version
+        manager.clearLauncherWallpaper()
+        val cleared = manager.getLauncherWallpaperState()
+        assertFalse(cleared.isEnabled)
+        assertTrue(cleared.version > v2)
+    }
+
+    @Test
+    fun testBankingAccessibilityPauseBlockedDuringActiveLockAndAllowedIdle() {
+        val now = 2_000_000L
+        val prefs = InMemorySharedPreferences()
+        val manager = FocusSessionManager(
+            context = null,
+            prefs = prefs,
+            clock = { now },
+            startTimerService = {},
+            stopTimerService = {}
+        )
+
+        // Idle mode: pause for banking is permitted
+        assertTrue(manager.canPauseAccessibilityForBanking())
+        assertTrue(manager.setAccessibilityPausedForBanking(true))
+        assertTrue(manager.isAccessibilityPausedForBanking())
+
+        manager.setAccessibilityPausedForBanking(false)
+        assertFalse(manager.isAccessibilityPausedForBanking())
+
+        // Active Focus lock: pausing shield for banking must be rejected
+        manager.startSession(25, strictMode = true)
+        assertFalse(manager.canPauseAccessibilityForBanking())
+        assertFalse(manager.setAccessibilityPausedForBanking(true))
+        assertFalse(manager.isAccessibilityPausedForBanking())
+    }
 }

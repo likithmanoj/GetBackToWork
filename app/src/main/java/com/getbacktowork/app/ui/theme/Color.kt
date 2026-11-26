@@ -5,16 +5,16 @@ import androidx.compose.ui.graphics.Color
 
 // True OLED Canvas & Tactile Zinc-Obsidian Surfaces (restraint over gradients)
 val DarkBackground = Color(0xFF000000)             // Pure OLED pitch black canvas
-val DarkSurface = Color(0xFF101114)                // Primary card & sheet surface
-val DarkSurfaceVariant = Color(0xFF181A20)         // Nested control, pill & track fill
-val DarkSurfaceElevated = Color(0xFF20222A)        // Active segmented tab / pressed fill
+val DarkSurface = Color(0xFF141416)                // Primary card & sheet surface
+val DarkSurfaceVariant = Color(0xFF1C1C1E)         // Nested control, pill & track fill
+val DarkSurfaceElevated = Color(0xFF2A2A2D)        // Active segmented tab / pressed fill
 val DarkCardBorder = Color(0x16FFFFFF)             // Subtle 8.6% hairline divider
 val HairlineBorder = Color(0x14FFFFFF)             // 7.8% architectural hairline stroke
 
 // High-Contrast Primary Ink & Controls
-val IvoryAction = Color(0xFFF4F4F5)                // Primary high-contrast CTA fill (19:1)
-val InkOnLight = Color(0xFF09090B)                 // Deep carbon ink on light/accent buttons
-val CrispBone = Color(0xFFF4F4F5)
+val IvoryAction = Color(0xFFFFFFFF)                // Pure crisp white CTA & progress arc
+val InkOnLight = Color(0xFF000000)                 // Pure black ink on white buttons/chips
+val CrispBone = Color(0xFFFFFFFF)
 
 // Restrained Functional Mode Accents (semantic dots, progress arcs, status tags)
 val BrandPrimary = Color(0xFFF59E0B)               // Warm Focus Amber

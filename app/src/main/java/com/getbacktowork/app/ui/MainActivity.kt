@@ -1,6 +1,5 @@
 package com.getbacktowork.app.ui
 
-import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.admin.DevicePolicyManager
 import android.content.Context
 import android.content.Intent
@@ -8,7 +7,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -74,6 +72,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.getbacktowork.app.data.FocusSessionManager
 import com.getbacktowork.app.service.AdminReceiver
+import com.getbacktowork.app.service.AppBlockerAccessibilityService
 import com.getbacktowork.app.ui.screens.DiaryScreen
 import com.getbacktowork.app.ui.screens.PermissionsScreen
 import com.getbacktowork.app.ui.screens.TimerScreen
@@ -262,9 +261,7 @@ private fun FirstRunOnboardingDialog(
     var selectedGoalMins by remember { mutableIntStateOf(sessionManager.getDailyScreenGoalMinutes()) }
     var priorityInput by remember { mutableStateOf(sessionManager.getLifeGoals().firstOrNull().orEmpty()) }
 
-    val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
-    val hasAccessibility = am?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-        ?.any { it.resolveInfo.serviceInfo.packageName == context.packageName } == true
+    val hasAccessibility = AppBlockerAccessibilityService.isAccessibilityServiceEnabled(context)
     val hasOverlay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Settings.canDrawOverlays(context) else true
 
     Dialog(
@@ -540,7 +537,7 @@ private fun DockItem(
     Column(
         modifier = modifier
             .fillMaxHeight()
-            .clip(RoundedCornerShape(25.dp))
+            .clip(RoundedCornerShape(28.dp))
             .background(bgColor)
             .clickable(
                 interactionSource = interactionSource,
@@ -554,7 +551,7 @@ private fun DockItem(
             imageVector = icon,
             contentDescription = label,
             tint = contentTint,
-            modifier = Modifier.size(19.dp)
+            modifier = Modifier.size(18.dp)
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
